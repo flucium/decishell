@@ -1,12 +1,9 @@
 use crate::token::Token;
 
-#[derive(Debug)]
 pub struct Lexer {
     source: Vec<char>,
-
-    peek: Option<Token>,
-
     position: usize,
+    peek: Option<Token>,
 
     is_eof: bool,
 }
@@ -15,8 +12,8 @@ impl Lexer {
     pub fn new(source: String) -> Self {
         Self {
             source: source.chars().collect(),
-            peek: None,
             position: 0,
+            peek: None,
             is_eof: false,
         }
     }
@@ -29,107 +26,67 @@ impl Lexer {
         self.peek.as_ref()
     }
 
-    fn consume(&mut self) {}
-
-    fn skip_commentout(&mut self) {
-        if matches!(self.source.get(self.position), Some('#')) == false {
-            return;
-        }
-
-        while let Some(ch) = self.source.get(self.position) {
-            self.position += 1;
-            if ch == &'\n' {
-                break;
-            }
-        }
-    }
-
     fn read(&mut self) -> Option<Token> {
         while let Some(ch) = self.source.get(self.position) {
-            //
+            self.position += 1;
+
             if ch.is_whitespace() {
-                self.position += 1;
                 continue;
             }
 
             match ch {
-                // ...
                 '#' => {
-                    // is include file
-                    if let Some(ch) = self.source.get(self.position + 1) {
-                        if ch == &'i' || ch == &'I' {
-                            let current_pos = self.position;
-                            self.position += 1;
-
-                            if self
-                                .read_string(false)
-                                .and_then(|string| Some(string.to_lowercase()))
-                                == Some(String::from("include"))
-                            {
-                                return Some(Token::Include);
-                            }
-
-                            self.position = current_pos;
+                    while let Some(ch) = self.source.get(self.position) {
+                        self.position += 1;
+                        if ch == &'\n' {
+                            break;
                         }
                     }
-
-                    // is comment out
-                    self.skip_commentout();
                 }
 
                 // ...
                 '\n' => {
-                    self.position += 1;
                     return Some(Token::EOL);
                 }
 
                 '|' => {
-                    self.position += 1;
                     return Some(Token::Pipe);
                 }
 
                 ';' => {
-                    self.position += 1;
                     return Some(Token::Semicolon);
                 }
 
                 '>' => {
-                    self.position += 1;
                     return Some(Token::Gt);
                 }
 
                 '<' => {
-                    self.position += 1;
                     return Some(Token::Lt);
                 }
 
                 '$' => {
-                    self.position += 1;
                     return Some(Token::Dollar);
                 }
 
                 '&' => {
-                    self.position += 1;
                     return Some(Token::Ampersand);
                 }
 
                 // ...
                 '"' => {
-                    self.position += 1;
-
-                    if let Some(string) = self.read_string(true) {
+                    if let Some(string) = self.read_ws_esc_string() {
                         return Some(Token::String(string));
                     }
                 }
 
                 _ => {
-                    if let Some(string) = self.read_string(false) {
+                    if let Some(string) = self.read_string() {
                         return Some(Token::String(string));
                     }
                 }
             }
         }
-
         if self.is_eof {
             None
         } else {
@@ -137,21 +94,38 @@ impl Lexer {
             Some(Token::EOF)
         }
     }
-    
 
-    fn read_string(&mut self, is_escape: bool) -> Option<String> {
+    fn read_string(&mut self) -> Option<String> {
+        let mut buffer = String::new();
+
+        // Get current char.
+        // self.position is +=1. Therefore, to know the current pos, do self.position - 1.
+        buffer.push(*self.source.get(self.position - 1)?);
+
+        while let Some(ch) = self.source.get(self.position) {
+            if ch.is_whitespace() || matches!(ch, ';' | '=' | '|' | '>' | '<') {
+                break;
+            }
+
+            self.position += 1;
+
+            buffer.push(*ch);
+        }
+
+        if buffer.is_empty() {
+            None
+        } else {
+            Some(buffer)
+        }
+    }
+
+    fn read_ws_esc_string(&mut self) -> Option<String> {
         let mut buffer = String::new();
 
         while let Some(ch) = self.source.get(self.position) {
-            if is_escape {
-                if ch == &'"' {
-                    self.position += 1;
-                    break;
-                }
-            } else {
-                if ch.is_whitespace() || matches!(ch, ';' | '=' | '|' | '>' | '<') {
-                    break;
-                }
+            if ch == &'"' {
+                self.position += 1;
+                break;
             }
 
             self.position += 1;
