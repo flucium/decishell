@@ -1,10 +1,11 @@
 use crate::token::Token;
+use std::fs::File;
+use std::io::Read;
 
 pub struct Lexer {
     source: Vec<char>,
+    source_length: usize,
     position: usize,
-    peek: Option<Token>,
-
     is_eof: bool,
 }
 
@@ -12,132 +13,171 @@ impl Lexer {
     pub fn new(source: String) -> Self {
         Self {
             source: source.chars().collect(),
+            source_length: source.len(),
             position: 0,
-            peek: None,
             is_eof: false,
         }
     }
 
-    pub fn peek(&mut self) -> Option<&Token> {
-        if self.peek.is_none() {
-            self.peek = self.read();
+    pub fn new_from_str(source: &str) -> Self {
+        Self {
+            source: source.chars().collect(),
+            source_length: source.len(),
+            position: 0,
+            is_eof: false,
         }
-
-        self.peek.as_ref()
     }
 
-    fn read(&mut self) -> Option<Token> {
-        while let Some(ch) = self.source.get(self.position) {
-            self.position += 1;
+    pub fn tokenize(&mut self) -> Vec<Token> {
+        let mut tokens = Vec::new();
 
-            if ch.is_whitespace() {
-                continue;
+        loop {
+            tokens.push(self.read());
+            if tokens.last().unwrap_or(&Token::EOF) == &Token::EOF {
+                break;
+            }
+        }
+
+        tokens
+    }
+
+    fn read(&mut self) -> Token {
+        let ch = loop {
+            let ch = match self.next_ch() {
+                None => return Token::EOF,
+                Some(ch) => ch,
+            };
+
+            if ch == '\n' || ch.is_whitespace() == false {
+                break ch;
+            }
+        };
+
+        match ch {
+            '#' => {
+                //skip commentout
+                while let Some(ch) = self.next_ch() {
+                    if ch == '\r' || ch == '\n' {
+                        break;
+                    }
+                }
+
+                self.read()
             }
 
-            match ch {
-                '#' => {
-                    while let Some(ch) = self.source.get(self.position) {
-                        self.position += 1;
-                        if ch == &'\n' {
-                            break;
+            '&' => {
+                if let Some(peek_ch) = self.peek_ch() {
+                    if peek_ch.is_whitespace() == false {
+                        let string = self.next_string(None, false).unwrap_or_default();
+
+                        if let Ok(n) = string.parse::<usize>() {
+                            return Token::Fd(n);
                         }
                     }
                 }
 
-                // ...
-                '\n' => {
-                    return Some(Token::EOL);
-                }
+                Token::Ampersand
+            }
 
-                '|' => {
-                    return Some(Token::Pipe);
-                }
-
-                ';' => {
-                    return Some(Token::Semicolon);
-                }
-
-                '>' => {
-                    return Some(Token::Gt);
-                }
-
-                '<' => {
-                    return Some(Token::Lt);
-                }
-
-                '$' => {
-                    return Some(Token::Dollar);
-                }
-
-                '&' => {
-                    return Some(Token::Ampersand);
-                }
-
-                // ...
-                '"' => {
-                    if let Some(string) = self.read_ws_esc_string() {
-                        return Some(Token::String(string));
+            '$' => {
+                if let Some(peek_ch) = self.peek_ch() {
+                    if peek_ch.is_whitespace() == false {
+                        return self
+                            .next_string(None, false)
+                            .map(|string| Token::Ident(string))
+                            .unwrap_or(Token::Dollar);
                     }
                 }
 
-                _ => {
-                    if let Some(string) = self.read_string() {
-                        return Some(Token::String(string));
-                    }
+                Token::Dollar
+            }
+
+            '|' => Token::Pipe,
+
+            '=' => Token::Assign,
+
+            '>' => Token::Gt,
+
+            '<' => Token::Lt,
+
+            // \r || \n
+            '\n' => Token::EOL,
+
+            ';' => Token::Semicolon,
+            
+            'i' | 'I' => {
+                let string = self.next_string(Some(ch), false).unwrap_or_default();
+
+                if string.to_lowercase() == "include" {
+                    Token::Include
+                } else {
+                    Token::String(string)
                 }
             }
-        }
-        if self.is_eof {
-            None
-        } else {
-            self.is_eof = true;
-            Some(Token::EOF)
+
+            // 'hello world'
+            '\'' => self
+                .next_string(None, true)
+                .map(|string| Token::String(string))
+                .unwrap_or(Token::EOF),
+
+            // "hello world"
+            '"' => self
+                .next_string(None, true)
+                .map(|string| Token::String(string))
+                .unwrap_or(Token::EOF),
+
+            // hello
+            _ => self
+                .next_string(Some(ch), false)
+                .map(|string| Token::String(string))
+                .unwrap_or(Token::EOF),
         }
     }
 
-    fn read_string(&mut self) -> Option<String> {
-        let mut buffer = String::new();
-
-        // Get current char.
-        // self.position is +=1. Therefore, to know the current pos, do self.position - 1.
-        buffer.push(*self.source.get(self.position - 1)?);
+    // ...
+    fn next_string(&mut self, current_char: Option<char>, whitespace: bool) -> Option<String> {
+        let mut buffer = match current_char {
+            None => String::new(),
+            Some(ch) => String::from(ch),
+        };
 
         while let Some(ch) = self.source.get(self.position) {
-            if ch.is_whitespace() || matches!(ch, ';' | '=' | '|' | '>' | '<') {
+            if ch.is_whitespace() && whitespace == false
+                || matches!(ch, ';' | '=' | '|' | '>' | '<' | '\n')
+            {
                 break;
             }
 
-            self.position += 1;
-
-            buffer.push(*ch);
-        }
-
-        if buffer.is_empty() {
-            None
-        } else {
-            Some(buffer)
-        }
-    }
-
-    fn read_ws_esc_string(&mut self) -> Option<String> {
-        let mut buffer = String::new();
-
-        while let Some(ch) = self.source.get(self.position) {
-            if ch == &'"' {
+            if ch == &'"' || ch == &'\'' && whitespace == true {
                 self.position += 1;
                 break;
             }
 
-            self.position += 1;
-
             buffer.push(*ch);
+            self.position += 1;
         }
 
-        if buffer.is_empty() {
-            None
-        } else {
-            Some(buffer)
+        match buffer.is_empty() {
+            true => None,
+            false => Some(buffer),
         }
+    }
+
+    fn peek_ch(&self) -> Option<&char> {
+        self.source.get(self.position)
+    }
+
+    fn next_ch(&mut self) -> Option<char> {
+        if self.position > self.source_length {
+            return None;
+        }
+
+        let ch = self.source.get(self.position)?;
+
+        self.position += 1;
+
+        Some(*ch)
     }
 }
 
@@ -145,10 +185,46 @@ impl Iterator for Lexer {
     type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(token) = self.peek.take() {
-            return Some(token);
+        let token = self.read();
+
+        if token == Token::EOF {
+            if self.is_eof {
+                None?
+            } else {
+                self.is_eof = true;
+            }
         }
 
-        self.read()
+        Some(token)
+    }
+}
+
+impl From<File> for Lexer {
+    fn from(mut file: File) -> Self {
+        let mut buffer = String::new();
+
+        file.read_to_string(&mut buffer).unwrap();
+
+        Self {
+            source: buffer.chars().collect(),
+            source_length: buffer.len(),
+            position: 0,
+            is_eof: false,
+        }
+    }
+}
+
+impl From<&File> for Lexer {
+    fn from(mut file: &File) -> Self {
+        let mut buffer = String::new();
+
+        file.read_to_string(&mut buffer).unwrap();
+
+        Self {
+            source: buffer.chars().collect(),
+            source_length: buffer.len(),
+            position: 0,
+            is_eof: false,
+        }
     }
 }

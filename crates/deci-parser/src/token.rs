@@ -1,4 +1,5 @@
-#[derive(Debug)]
+
+#[derive(Debug, PartialEq)]
 pub enum Token {
     EOF,
     EOL,
